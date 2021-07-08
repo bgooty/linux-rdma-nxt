@@ -1821,16 +1821,20 @@ static int bnxt_re_modify_shadow_qp(struct bnxt_re_dev *rdev,
 int bnxt_re_modify_qp(struct ib_qp *ib_qp, struct ib_qp_attr *qp_attr,
 		      int qp_attr_mask, struct ib_udata *udata)
 {
-	struct bnxt_re_qp *qp = container_of(ib_qp, struct bnxt_re_qp, ib_qp);
-	struct bnxt_re_dev *rdev = qp->rdev;
-	struct bnxt_qplib_dev_attr *dev_attr = &rdev->dev_attr;
 	enum ib_qp_state curr_qp_state, new_qp_state;
+	struct bnxt_qplib_dev_attr *dev_attr;
+	struct bnxt_re_dev *rdev;
+	struct bnxt_re_qp *qp;
 	int rc, entries;
 	unsigned int flags;
 	u8 nw_type;
 
 	if (qp_attr_mask & ~IB_QP_ATTR_STANDARD_BITS)
 		return -EOPNOTSUPP;
+
+	qp = to_bnxt_re(ib_qp, struct bnxt_re_qp, ib_qp);
+	rdev = qp->rdev;
+	dev_attr = rdev->dev_attr;
 
 	qp->qplib_qp.modify_flags = 0;
 	if (qp_attr_mask & IB_QP_STATE) {
@@ -1943,18 +1947,19 @@ int bnxt_re_modify_qp(struct ib_qp *ib_qp, struct ib_qp_attr *qp_attr,
 		}
 	}
 
-	if (qp_attr_mask & IB_QP_PATH_MTU) {
-		qp->qplib_qp.modify_flags |=
-				CMDQ_MODIFY_QP_MODIFY_MASK_PATH_MTU;
-		qp->qplib_qp.path_mtu = __from_ib_mtu(qp_attr->path_mtu);
-		qp->qplib_qp.mtu = ib_mtu_enum_to_int(qp_attr->path_mtu);
-	} else if (qp_attr->qp_state == IB_QPS_RTR) {
-		qp->qplib_qp.modify_flags |=
-			CMDQ_MODIFY_QP_MODIFY_MASK_PATH_MTU;
-		qp->qplib_qp.path_mtu =
-			__from_ib_mtu(iboe_get_mtu(rdev->netdev->mtu));
-		qp->qplib_qp.mtu =
-			ib_mtu_enum_to_int(iboe_get_mtu(rdev->netdev->mtu));
+	/* MTU settings allowed only during INIT -> RTR */
+	if (qp_attr->qp_state == IB_QPS_RTR) {
+		rc = bnxt_re_init_qpmtu(qp, rdev->netdev->mtu, qp_attr_mask,
+					qp_attr);
+		if (rc) {
+			dev_err(rdev_to_dev(rdev), "qp %#x invalid mtu",
+				qp->qplib_qp.id);
+			/* TODO: Remove below line when driver has a way to
+			 * update user QP about trimmed mtu. Failure is non-
+			 * compliance to IB-Spec and is temporarily here.
+			 */
+			return -EINVAL;
+		}
 	}
 
 	if (qp_attr_mask & IB_QP_TIMEOUT) {
